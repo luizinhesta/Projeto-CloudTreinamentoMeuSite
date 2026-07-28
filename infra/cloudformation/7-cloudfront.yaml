@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 7 - CloudFront Distribution. PROD ONLY. Conta PROD (612131776567).
+  Criado na conta PROD via pipeline nativo CloudFormation.
+  Busca o DNS do ALB via Fn::ImportValue da stack 5-alb.
+  Origin: ALB PROD via HTTP. Viewer: HTTPS com certificado ACM.
+  Seguranca: CloudFront envia header secreto X-Origin-Verify para o ALB.
+  O ALB so aceita requisicoes com esse header (stack 5-alb valida).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [prod]
+    Default: prod
+
+  DomainName:
+    Type: String
+    Default: meusite.inhesta.net
+    Description: Dominio publico do site (alias no CloudFront)
+
+  AcmCertificateArn:
+    Type: String
+    Description: ARN do certificado ACM us-east-1
+
+  OriginVerifySecret:
+    Type: String
+    Default: meusite-prod-origin-secret-2024
+    NoEcho: true
+    Description: >
+      Valor do header X-Origin-Verify enviado pelo CloudFront ao ALB.
+      O ALB so aceita requisicoes com este header exato.
+      Altere este valor para rotacionar o segredo (requer re-deploy de ambas as stacks).
+
+Resources:
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: meusite-prod-cloudfront
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Aliases:
+          - !Ref DomainName
+        Origins:
+          - Id: alb-origin
+            DomainName: !ImportValue MeuSite-prod-AlbDnsName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginVerifySecret
+        DefaultCacheBehavior:
+          TargetOriginId: alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+      Tags:
+        - Key: Name
+          Value: meusite-prod-cloudfront
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+Outputs:
+  CloudFrontDomainName:
+    Description: Domain name da distribuicao CloudFront
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: MeuSite-prod-CloudFrontDomainName
+
+  CloudFrontDistributionId:
+    Description: ID da distribuicao CloudFront
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: MeuSite-prod-CloudFrontDistributionId
+
+  CloudFrontHostedZoneId:
+    Description: Hosted Zone ID do CloudFront (fixo para alias Route53)
+    Value: Z2FDTNDATAQYW2
+    Export:
+      Name: MeuSite-prod-CloudFrontHostedZoneId

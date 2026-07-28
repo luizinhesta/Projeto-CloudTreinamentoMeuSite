@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 6 - ECS Task Definition e Service (DEV e PROD).
+  Usa Fn::ImportValue para buscar cluster, TG ARN, SG e subnets privadas.
+  DesiredCount=0 na criacao. Pipeline de app sobe para 1.
+  PROD: Auto Scaling habilitado (min 1, max 4, baseado em CPU 70%).
+  DEV:  Sem Auto Scaling (economiza custo).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+  DesiredCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 10
+    Description: Numero de tasks desejadas. 0 = pausado.
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
+
+Resources:
+
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "meusite-${Environment}-ecs-task-execution-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-ecs-task-execution-role"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  EcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/meusite-${Environment}-app"
+      RetentionInDays: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-ecs-logs"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: EcsLogGroup
+    Properties:
+      Family: !Sub "meusite-${Environment}-task"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: meusite
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/meusite-app:latest"
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub "/ecs/meusite-${Environment}-app"
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: meusite
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-task"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  EcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "meusite-${Environment}-service"
+      Cluster: !ImportValue
+        Fn::Sub: "MeuSite-${Environment}-ClusterName"
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "MeuSite-${Environment}-PrivateSubnet1Id"
+            - !ImportValue
+              Fn::Sub: "MeuSite-${Environment}-PrivateSubnet2Id"
+          SecurityGroups:
+            - !ImportValue
+              Fn::Sub: "MeuSite-${Environment}-EcsTasksSecurityGroupId"
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: meusite
+          ContainerPort: 8080
+          TargetGroupArn: !ImportValue
+            Fn::Sub: "MeuSite-${Environment}-TargetGroupArn"
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+        DeploymentCircuitBreaker:
+          Enable: false
+          Rollback: false
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-service"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Auto Scaling (apenas PROD) ────────────────────────────────────────────
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: IsProd
+    DependsOn: EcsService
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 4
+      ResourceId: !Sub "service/meusite-${Environment}-cluster/meusite-${Environment}-service"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService"
+
+  AutoScalingPolicyCpu:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: IsProd
+    Properties:
+      PolicyName: !Sub "meusite-${Environment}-cpu-scaling"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+Outputs:
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+    Export:
+      Name: !Sub "MeuSite-${Environment}-TaskDefinitionArn"
+
+  EcsServiceArn:
+    Value: !GetAtt EcsService.ServiceArn
+    Export:
+      Name: !Sub "MeuSite-${Environment}-EcsServiceArn"
+
+  EcsServiceName:
+    Value: !GetAtt EcsService.Name
+    Export:
+      Name: !Sub "MeuSite-${Environment}-EcsServiceName"
+
+  LogGroupName:
+    Value: !Ref EcsLogGroup
+    Export:
+      Name: !Sub "MeuSite-${Environment}-LogGroupName"

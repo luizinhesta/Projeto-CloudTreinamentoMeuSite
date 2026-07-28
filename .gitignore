@@ -1,0 +1,30 @@
+# Build ASP.NET
+bin/
+obj/
+
+# Visual Studio
+.vs/
+
+# VS Code
+.vscode/
+
+# Arquivos temporários
+*.log
+*.tmp
+
+# Docker antigo
+Dockerfile_old
+
+# Arquivos que não precisa subir
+meusite/PROJETO 2 Mentoria.pdf
+meusite/README.md
+meusite/README-PTBR.md
+meusite/buildspec.yml
+meusite/docker-compose.yml
+
+# Publicação local
+publish/
+
+# Sistema
+.DS_Store
+Thumbs.db

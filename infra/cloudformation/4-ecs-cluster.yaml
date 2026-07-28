@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 4 - Cluster ECS Fargate.
+  Nome fixo meusite-{env}-cluster usando parametro Environment diretamente.
+  IMPORTANTE: Nao usar ${AWS::StackName} no nome do cluster - isso quebraria
+  a referencia entre stacks caso a stack seja renomeada.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+Resources:
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "meusite-${Environment}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-cluster"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  ClusterName:
+    Description: Nome do cluster ECS (ex meusite-dev-cluster)
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub "MeuSite-${Environment}-ClusterName"
+
+  ClusterArn:
+    Description: ARN do cluster ECS
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub "MeuSite-${Environment}-ClusterArn"

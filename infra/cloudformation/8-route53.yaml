@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 8 - Route53 Alias Record.
+  Criado na propria conta (DEV ou PROD), sem cross-account.
+  DEV:  Hosted Zone dev.inhesta.net na conta DEV - Alias A para ALB.
+  PROD: Hosted Zone prod.inhesta.net na conta PROD - Alias A para CloudFront.
+  Pre-requisito: Hosted Zone delegada deve existir na propria conta.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Ambiente (dev ou prod)
+
+  DomainName:
+    Type: String
+    Description: Registro DNS a criar (ex meusite.dev.inhesta.net ou meusite.prod.inhesta.net)
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: >
+      ID da Hosted Zone delegada na propria conta.
+      DEV:  Hosted Zone de dev.inhesta.net na conta DEV.
+      PROD: Hosted Zone de prod.inhesta.net na conta PROD.
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
+  IsDev:  !Equals [!Ref Environment, "dev"]
+
+Resources:
+
+  # PROD: Alias para CloudFront
+  DnsRecordProd:
+    Type: AWS::Route53::RecordSet
+    Condition: IsProd
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        HostedZoneId: !ImportValue MeuSite-prod-CloudFrontHostedZoneId
+        DNSName: !ImportValue MeuSite-prod-CloudFrontDomainName
+        EvaluateTargetHealth: false
+      Comment: meusite-prod via CloudFront
+
+  # DEV: Alias para ALB
+  DnsRecordDev:
+    Type: AWS::Route53::RecordSet
+    Condition: IsDev
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        HostedZoneId: !ImportValue MeuSite-dev-AlbHostedZoneId
+        DNSName: !ImportValue MeuSite-dev-AlbDnsName
+        EvaluateTargetHealth: true
+      Comment: meusite-dev via ALB
+
+Outputs:
+  RecordName:
+    Description: Nome do registro DNS criado
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub "MeuSite-${Environment}-Route53RecordName"

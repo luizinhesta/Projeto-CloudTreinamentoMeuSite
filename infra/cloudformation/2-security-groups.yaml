@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 2 - Security Groups para ALB (publico) e ECS Tasks (privado).
+  Usa Fn::ImportValue para buscar VpcId da stack 1-vpc.
+  DEV:  ALB aceita HTTP de qualquer origem (0.0.0.0/0).
+  PROD: ALB aceita HTTP apenas dos IPs do CloudFront via AWS Managed Prefix List.
+        O Managed Prefix List (com.amazonaws.global.cloudfront.origin-facing)
+        e mantido automaticamente pela AWS com todos os ranges do CloudFront.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
+  IsDev:  !Equals [!Ref Environment, "dev"]
+
+Resources:
+
+  # ── DEV: ALB aceita HTTPS de qualquer origem ─────────────────────────────
+  AlbSecurityGroupDev:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsDev
+    Properties:
+      GroupDescription: SG do ALB meusite-dev - permite HTTP 80 e HTTPS 443 de qualquer origem
+      VpcId: !ImportValue MeuSite-dev-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP de qualquer origem - redireciona para HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS de qualquer origem (DEV)
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Todo trafego de saida permitido
+      Tags:
+        - Key: Name
+          Value: meusite-dev-alb-sg
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: dev
+
+  # ── PROD: ALB aceita HTTP apenas dos IPs do CloudFront ───────────────────
+  # AWS Managed Prefix List: com.amazonaws.global.cloudfront.origin-facing
+  # Mantido automaticamente pela AWS - nao requer atualizacao manual de IPs
+  AlbSecurityGroupProd:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsProd
+    Properties:
+      GroupDescription: SG do ALB meusite-prod - permite HTTP 80 apenas dos IPs do CloudFront
+      VpcId: !ImportValue MeuSite-prod-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: pl-3b927c52
+          Description: HTTP apenas dos IPs do CloudFront (AWS Managed Prefix List)
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Todo trafego de saida permitido
+      Tags:
+        - Key: Name
+          Value: meusite-prod-alb-sg
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+  # ── ECS Tasks: aceita apenas trafego do ALB na porta 8080 ────────────────
+  EcsTasksSecurityGroupDev:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsDev
+    Properties:
+      GroupDescription: SG das ECS Tasks meusite-dev - permite 8080 apenas do ALB
+      VpcId: !ImportValue MeuSite-dev-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroupDev
+          Description: Porta 8080 apenas do ALB Security Group
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Todo trafego de saida permitido
+      Tags:
+        - Key: Name
+          Value: meusite-dev-ecs-tasks-sg
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: dev
+
+  EcsTasksSecurityGroupProd:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsProd
+    Properties:
+      GroupDescription: SG das ECS Tasks meusite-prod - permite 8080 apenas do ALB
+      VpcId: !ImportValue MeuSite-prod-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroupProd
+          Description: Porta 8080 apenas do ALB Security Group
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Todo trafego de saida permitido
+      Tags:
+        - Key: Name
+          Value: meusite-prod-ecs-tasks-sg
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+Outputs:
+  AlbSecurityGroupId:
+    Description: ID do Security Group do ALB
+    Value: !If [IsProd, !Ref AlbSecurityGroupProd, !Ref AlbSecurityGroupDev]
+    Export:
+      Name: !Sub "MeuSite-${Environment}-AlbSecurityGroupId"
+
+  EcsTasksSecurityGroupId:
+    Description: ID do Security Group das ECS Tasks
+    Value: !If [IsProd, !Ref EcsTasksSecurityGroupProd, !Ref EcsTasksSecurityGroupDev]
+    Export:
+      Name: !Sub "MeuSite-${Environment}-EcsTasksSecurityGroupId"

@@ -1,0 +1,366 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CodePipeline INFRA DEV - Conta DEV (377235609325).
+  Pipeline 100% nativo CloudFormation: Source → VPC → SG → ECR → ECS_Cluster → ALB → ECS_Service → Route53.
+  Sem CodeBuild. Route53 criado na Hosted Zone dev.inhesta.net da propria conta DEV.
+  Source: S3 (zip enviado pelo GitHub Actions).
+
+Parameters:
+  ArtifactsBucketName:
+    Type: String
+    Default: meusite-codepipeline-dev-us-east-1
+
+  SourceS3Key:
+    Type: String
+    Default: source/source.zip
+
+  HostedZoneIdDev:
+    Type: AWS::Route53::HostedZone::Id
+    Description: ID da Hosted Zone dev.inhesta.net na conta DEV
+
+Resources:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # IAM - Role do CodePipeline
+  # ══════════════════════════════════════════════════════════════════════════
+  CodePipelineInfraRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: meusite-dev-codepipeline-infra-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: meusite-dev-codepipeline-infra-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt CloudFormationDeployRole.Arn
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/meusite-*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: dev
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # IAM - Role que o CloudFormation usa para criar recursos
+  # ══════════════════════════════════════════════════════════════════════════
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: meusite-dev-cfn-deploy-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: meusite-dev-cfn-deploy-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:Create*
+                  - ec2:Delete*
+                  - ec2:Describe*
+                  - ec2:Modify*
+                  - ec2:Attach*
+                  - ec2:Detach*
+                  - ec2:Associate*
+                  - ec2:Disassociate*
+                  - ec2:Allocate*
+                  - ec2:Release*
+                  - ec2:Authorize*
+                  - ec2:Revoke*
+                Resource: "*"
+              - Effect: Allow
+                Action: elasticloadbalancing:*
+                Resource: "*"
+              - Effect: Allow
+                Action: ecs:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:PutLifecyclePolicy
+                  - ecr:GetLifecyclePolicy
+                  - ecr:TagResource
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetChange
+                  - route53:ListHostedZones
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${ArtifactsBucketName}/*"
+      Tags:
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: dev
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # CodePipeline INFRA DEV - 100% provider nativo CloudFormation
+  # ══════════════════════════════════════════════════════════════════════════
+  PipelineInfra:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - CodePipelineInfraRole
+      - CloudFormationDeployRole
+    Properties:
+      Name: meusite-dev-infra-pipeline
+      RoleArn: !GetAtt CodePipelineInfraRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucketName
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      Stages:
+
+        - Name: Source
+          Actions:
+            - Name: S3_Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket: !Ref ArtifactsBucketName
+                S3ObjectKey: !Ref SourceS3Key
+                PollForSourceChanges: "false"
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: VPC
+          Actions:
+            - Name: Deploy_VPC
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-vpc
+                TemplatePath: "SourceCode::infra/cloudformation/1-vpc.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {"Environment": "dev"}
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: Security_Groups
+          Actions:
+            - Name: Deploy_Security_Groups
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-security-groups
+                TemplatePath: "SourceCode::infra/cloudformation/2-security-groups.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {"Environment": "dev"}
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: ECR
+          Actions:
+            - Name: Deploy_ECR
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-ecr
+                TemplatePath: "SourceCode::infra/cloudformation/3-ecr.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {"Environment": "dev"}
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: ECS_Cluster
+          Actions:
+            - Name: Deploy_ECS_Cluster
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-ecs-cluster
+                TemplatePath: "SourceCode::infra/cloudformation/4-ecs-cluster.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {"Environment": "dev"}
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: ALB
+          Actions:
+            - Name: Deploy_ALB
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-alb
+                TemplatePath: "SourceCode::infra/cloudformation/5-alb.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {
+                    "Environment": "dev",
+                    "AcmCertificateArn": "arn:aws:acm:us-east-1:377235609325:certificate/1bbfca59-b160-406e-bca1-6a035c30d053"
+                  }
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: ECS_Service
+          Actions:
+            - Name: Deploy_ECS_Service
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-ecs-service
+                TemplatePath: "SourceCode::infra/cloudformation/6-ecs-service.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {"Environment": "dev", "DesiredCount": "0"}
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: Route53
+          Actions:
+            - Name: Deploy_Route53
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: meusite-dev-route53
+                TemplatePath: "SourceCode::infra/cloudformation/8-route53.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "Environment": "dev",
+                    "DomainName": "meusite.dev.inhesta.net",
+                    "HostedZoneId": "${HostedZoneIdDev}"
+                  }
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+      Tags:
+        - Key: Name
+          Value: meusite-dev-infra-pipeline
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: dev
+
+Outputs:
+  PipelineName:
+    Value: meusite-dev-infra-pipeline
+    Export:
+      Name: MeuSite-Dev-InfraPipelineName

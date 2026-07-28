@@ -1,0 +1,109 @@
+version: 0.2
+
+# BuildSpec: Deploy ECS DEV
+# Inputs:
+#   - SourceCode: codigo do repositorio (contem este buildspec)
+#   - BuildOutput: artefato do stage anterior (contem imagedefinitions.json)
+#
+# Fluxo:
+#   1. Le a imagem nova do imagedefinitions.json
+#   2. Busca a task definition atual do ECS Service
+#   3. Registra nova revisao com a imagem nova
+#   4. Atualiza o ECS Service com desired-count 1
+#   5. Aguarda estabilizar
+
+env:
+  variables:
+    AWS_REGION: "us-east-1"
+    ENV: "dev"
+
+phases:
+  build:
+    commands:
+      - |
+        set -e
+        echo "=== Deploy ECS DEV ==="
+
+        # BuildOutput fica em $CODEBUILD_SRC_DIR_BuildOutput
+        BUILD_DIR="${CODEBUILD_SRC_DIR_BuildOutput}"
+        echo "Lendo imagedefinitions.json de: $BUILD_DIR"
+        cat "$BUILD_DIR/imagedefinitions.json"
+
+        NEW_IMAGE=$(python3 -c "import json; print(json.load(open('${BUILD_DIR}/imagedefinitions.json'))[0]['imageUri'])")
+        echo "Nova imagem: $NEW_IMAGE"
+
+        CLUSTER="meusite-${ENV}-cluster"
+        SERVICE="meusite-${ENV}-service"
+
+        # Busca task definition atual
+        CURRENT_TASK_DEF=$(aws ecs describe-services \
+          --cluster "$CLUSTER" --services "$SERVICE" \
+          --region $AWS_REGION \
+          --query "services[0].taskDefinition" --output text)
+        echo "Task definition atual: $CURRENT_TASK_DEF"
+
+        # Gera nova task definition com a imagem atualizada
+        # Salva em arquivo para evitar problemas de escape no shell
+        aws ecs describe-task-definition \
+          --task-definition "$CURRENT_TASK_DEF" \
+          --region $AWS_REGION \
+          --query "taskDefinition" \
+          --output json > /tmp/current-task.json
+
+        python3 << 'PYEOF'
+        import json
+
+        with open('/tmp/current-task.json') as f:
+            td = json.load(f)
+
+        import os
+        new_image = os.environ['NEW_IMAGE']
+        for c in td['containerDefinitions']:
+            if c['name'] == 'meusite-container':
+                c['image'] = new_image
+                print(f"Imagem atualizada: {new_image}")
+
+        # Remove campos somente-leitura
+        for k in ['taskDefinitionArn','revision','status','requiresAttributes',
+                  'compatibilities','registeredAt','registeredBy']:
+            td.pop(k, None)
+
+        with open('/tmp/new-task.json', 'w') as f:
+            json.dump(td, f)
+        print("Nova task definition salva em /tmp/new-task.json")
+        PYEOF
+
+        cat /tmp/new-task.json
+
+        echo "Registrando nova revisao..."
+        NEW_REVISION=$(aws ecs register-task-definition \
+          --region $AWS_REGION \
+          --cli-input-json file:///tmp/new-task.json \
+          --query "taskDefinition.taskDefinitionArn" \
+          --output text)
+        echo "Nova revisao registrada: $NEW_REVISION"
+
+        # Atualiza o service com desired-count 1 e nova task definition
+        echo "Atualizando service $SERVICE..."
+        aws ecs update-service \
+          --cluster "$CLUSTER" \
+          --service "$SERVICE" \
+          --task-definition "$NEW_REVISION" \
+          --desired-count 1 \
+          --region $AWS_REGION
+
+        echo "Aguardando service estabilizar (timeout: 10min)..."
+        aws ecs wait services-stable \
+          --cluster "$CLUSTER" \
+          --services "$SERVICE" \
+          --region $AWS_REGION
+
+        echo "=== Service DEV estabilizado ==="
+        echo "Task definition ativa: $NEW_REVISION"
+        echo "Imagem: $NEW_IMAGE"
+
+        ALB_DNS=$(aws cloudformation describe-stacks \
+          --stack-name "meusite-${ENV}-alb" \
+          --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" \
+          --output text --region $AWS_REGION 2>/dev/null || echo "N/A")
+        echo "Acesso DEV: http://$ALB_DNS"

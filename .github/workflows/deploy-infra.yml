@@ -1,0 +1,435 @@
+name: Deploy Infrastructure
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESPONSABILIDADE DESTE WORKFLOW:
+#   Criar (ou atualizar) os CodePipelines na conta AWS correta.
+#   Dois pipelines por ambiente:
+#     - infra: Source → VPC → SG → ECR → ECS_Cluster → ALB → ECS_Service → Route53
+#     - app:   Source → Docker_Build_Push_ECR → Deploy_ECS
+#
+# O QUE ESTE WORKFLOW FAZ:
+#   deploy → cria bucket S3, sobe zip do repo, cria/atualiza os dois pipelines
+#   delete → deleta pipelines e stacks de infra na ordem correta
+#
+# SECRETS NECESSÁRIOS NO GITHUB:
+#   AWS_ROLE_ARN_DEV  - ARN da role OIDC na conta DEV
+#   AWS_ROLE_ARN_PROD - ARN da role OIDC na conta PROD
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Conta alvo do pipeline'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      action:
+        description: 'Acao a executar'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - delete
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════
+  # DEPLOY
+  # ══════════════════════════════════════════════════════════════════════════
+  deploy-pipeline:
+    name: Deploy CodePipeline (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    if: inputs.action == 'deploy'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Credenciais OIDC ────────────────────────────────────────────────
+      - name: Configure AWS Credentials (DEV)
+        if: inputs.environment == 'dev'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-create-pipeline-dev
+
+      - name: Configure AWS Credentials (PROD)
+        if: inputs.environment == 'prod'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-create-pipeline-prod
+
+      # ── Seleciona variáveis por ambiente ────────────────────────────────
+      - name: Set variables
+        run: |
+          ENV="${{ inputs.environment }}"
+          if [ "$ENV" = "dev" ]; then
+            echo "STACK_INFRA=meusite-dev-infra-codepipeline"   >> $GITHUB_ENV
+            echo "STACK_APP=meusite-dev-app-codepipeline"       >> $GITHUB_ENV
+            echo "TEMPLATE_INFRA=infra/codepipeline/pipelines/pipeline-infra-dev.yaml" >> $GITHUB_ENV
+            echo "TEMPLATE_APP=infra/codepipeline/pipelines/pipeline-app-dev.yaml"     >> $GITHUB_ENV
+            echo "BUCKET_NAME=meusite-codepipeline-dev-us-east-1"                      >> $GITHUB_ENV
+            echo "PIPELINE_INFRA=meusite-dev-infra-pipeline"    >> $GITHUB_ENV
+          else
+            echo "STACK_INFRA=meusite-prod-infra-codepipeline"  >> $GITHUB_ENV
+            echo "STACK_APP=meusite-prod-app-codepipeline"      >> $GITHUB_ENV
+            echo "TEMPLATE_INFRA=infra/codepipeline/pipelines/pipeline-infra-prod.yaml" >> $GITHUB_ENV
+            echo "TEMPLATE_APP=infra/codepipeline/pipelines/pipeline-app-prod.yaml"     >> $GITHUB_ENV
+            echo "BUCKET_NAME=meusite-codepipeline-prod-us-east-1"                      >> $GITHUB_ENV
+            echo "PIPELINE_INFRA=meusite-prod-infra-pipeline"   >> $GITHUB_ENV
+          fi
+
+      # ── Cria service-linked roles necessarias (primeira vez na conta) ────────
+      - name: Create service-linked roles (PROD)
+        if: inputs.environment == 'prod'
+        run: |
+          echo "Criando service-linked roles necessarias na conta PROD..."
+          aws iam create-service-linked-role \
+            --aws-service-name elasticloadbalancing.amazonaws.com 2>/dev/null \
+            && echo "SLR ELB criada." || echo "SLR ELB ja existe."
+          aws iam create-service-linked-role \
+            --aws-service-name ecs.amazonaws.com 2>/dev/null \
+            && echo "SLR ECS criada." || echo "SLR ECS ja existe."
+
+      # ── Limpa stacks em estado de falha ──────────────────────────────────
+      - name: Cleanup stacks in failed state
+        run: |
+          for STACK_NAME in "$STACK_INFRA" "$STACK_APP"; do
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].StackStatus" \
+              --output text \
+              --region ${{ env.AWS_REGION }} 2>/dev/null || echo "DOES_NOT_EXIST")
+            echo "Status da stack $STACK_NAME: $STATUS"
+            if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || \
+               [ "$STATUS" = "CREATE_FAILED" ]     || \
+               [ "$STATUS" = "ROLLBACK_FAILED" ]   || \
+               [ "$STATUS" = "UPDATE_ROLLBACK_COMPLETE" ] || \
+               [ "$STATUS" = "UPDATE_ROLLBACK_FAILED" ]; then
+              echo "Deletando $STACK_NAME ($STATUS)..."
+              aws cloudformation delete-stack --stack-name "$STACK_NAME" --region ${{ env.AWS_REGION }}
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region ${{ env.AWS_REGION }}
+              echo "Stack $STACK_NAME deletada."
+            elif [ "$STATUS" = "DOES_NOT_EXIST" ]; then
+              echo "Stack $STACK_NAME nao existe. Sera criada."
+            else
+              echo "Stack $STACK_NAME em estado $STATUS. Prosseguindo com update."
+            fi
+          done
+
+      # ── Cria bucket S3 se não existir ────────────────────────────────────
+      - name: Create S3 bucket if not exists
+        run: |
+          if aws s3api head-bucket --bucket "$BUCKET_NAME" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Bucket $BUCKET_NAME ja existe."
+          else
+            echo "Criando bucket $BUCKET_NAME..."
+            aws s3api create-bucket \
+              --bucket "$BUCKET_NAME" \
+              --region ${{ env.AWS_REGION }}
+            aws s3api put-bucket-versioning \
+              --bucket "$BUCKET_NAME" \
+              --versioning-configuration Status=Enabled
+            aws s3api put-bucket-encryption \
+              --bucket "$BUCKET_NAME" \
+              --server-side-encryption-configuration \
+                '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
+            aws s3api put-public-access-block \
+              --bucket "$BUCKET_NAME" \
+              --public-access-block-configuration \
+                "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+            echo "Bucket criado."
+          fi
+
+      # ── Zip do código e upload para S3 ───────────────────────────────────
+      - name: Upload source code to S3
+        run: |
+          echo "Criando zip do repositorio..."
+          zip -r source.zip . --exclude "*.git*" --exclude ".github/*"
+          echo "Upload para s3://$BUCKET_NAME/source/source.zip ..."
+          aws s3 cp source.zip "s3://$BUCKET_NAME/source/source.zip" --region ${{ env.AWS_REGION }}
+          echo "Upload concluido."
+          rm source.zip
+
+      # ── Deploy dos dois pipelines ─────────────────────────────────────────
+      - name: Deploy CodePipeline stacks
+        run: |
+          ENV="${{ inputs.environment }}"
+
+          if [ "$ENV" = "dev" ]; then
+            # Busca o ID da Hosted Zone dev.inhesta.net na conta DEV
+            HZ_ID=$(aws route53 list-hosted-zones-by-name \
+              --dns-name "dev.inhesta.net." \
+              --query "HostedZones[?Name=='dev.inhesta.net.'].Id" \
+              --output text | sed 's|/hostedzone/||')
+            echo "HostedZoneId DEV: $HZ_ID"
+            aws cloudformation deploy \
+              --template-file "$TEMPLATE_INFRA" \
+              --stack-name "$STACK_INFRA" \
+              --parameter-overrides ArtifactsBucketName="$BUCKET_NAME" HostedZoneIdDev="$HZ_ID" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --no-fail-on-empty-changeset \
+              --region ${{ env.AWS_REGION }}
+          else
+            # Busca o ID da Hosted Zone prod.inhesta.net na conta PROD
+            HZ_ID=$(aws route53 list-hosted-zones-by-name \
+              --dns-name "prod.inhesta.net." \
+              --query "HostedZones[?Name=='prod.inhesta.net.'].Id" \
+              --output text | sed 's|/hostedzone/||')
+            echo "HostedZoneId PROD: $HZ_ID"
+            aws cloudformation deploy \
+              --template-file "$TEMPLATE_INFRA" \
+              --stack-name "$STACK_INFRA" \
+              --parameter-overrides ArtifactsBucketName="$BUCKET_NAME" HostedZoneIdProd="$HZ_ID" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --no-fail-on-empty-changeset \
+              --region ${{ env.AWS_REGION }}
+          fi
+          echo "Pipeline de Infra criado/atualizado."
+
+          aws cloudformation deploy \
+            --template-file "$TEMPLATE_APP" \
+            --stack-name "$STACK_APP" \
+            --parameter-overrides ArtifactsBucketName="$BUCKET_NAME" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+          echo "Pipeline de App criado/atualizado."
+
+      # ── Dispara o pipeline de infra ───────────────────────────────────────
+      - name: Start infra pipeline execution
+        run: |
+          echo "Disparando: $PIPELINE_INFRA"
+          aws codepipeline start-pipeline-execution \
+            --name "$PIPELINE_INFRA" \
+            --region ${{ env.AWS_REGION }}
+          echo ""
+          echo "Stages: Source → VPC → Security_Groups → ECR → ECS_Cluster → ALB → ECS_Service"
+          echo "Apos a infra pronta, rode manualmente o pipeline de app."
+          echo "Acompanhe: https://console.aws.amazon.com/codesuite/codepipeline/pipelines?region=${{ env.AWS_REGION }}"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # DELETE
+  # ══════════════════════════════════════════════════════════════════════════
+  delete-pipeline:
+    name: Delete Pipeline + Infra (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    if: inputs.action == 'delete'
+
+    steps:
+      - name: Configure AWS Credentials (DEV)
+        if: inputs.environment == 'dev'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-delete-pipeline-dev
+
+      - name: Configure AWS Credentials (PROD)
+        if: inputs.environment == 'prod'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-delete-pipeline-prod
+
+      # ── Deleta Route53 e CloudFront nas proprias contas ──────────────────
+      - name: Delete Route53 + CloudFront (DEV)
+        if: inputs.environment == 'dev'
+        run: |
+          for STACK in meusite-dev-route53; do
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK" --query "Stacks[0].StackStatus" \
+              --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [ "$STATUS" != "DOES_NOT_EXIST" ]; then
+              echo "Deletando: $STACK"
+              aws cloudformation delete-stack --stack-name "$STACK" --region ${{ env.AWS_REGION }}
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region ${{ env.AWS_REGION }} || true
+            else
+              echo "$STACK nao existe, pulando."
+            fi
+          done
+
+      - name: Delete Route53 + CloudFront (PROD)
+        if: inputs.environment == 'prod'
+        run: |
+          for STACK in meusite-prod-route53 meusite-prod-cloudfront; do
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK" --query "Stacks[0].StackStatus" \
+              --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [ "$STATUS" != "DOES_NOT_EXIST" ]; then
+              echo "Deletando: $STACK"
+              aws cloudformation delete-stack --stack-name "$STACK" --region ${{ env.AWS_REGION }}
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region ${{ env.AWS_REGION }} || true
+            else
+              echo "$STACK nao existe, pulando."
+            fi
+          done
+      - name: Delete infrastructure stacks
+        if: inputs.environment == 'dev' || inputs.environment == 'prod'
+        run: |
+          ENV="${{ inputs.environment }}"
+          for STACK in \
+            "meusite-${ENV}-ecs-service" \
+            "meusite-${ENV}-alb" \
+            "meusite-${ENV}-ecs-cluster" \
+            "meusite-${ENV}-ecr" \
+            "meusite-${ENV}-security-groups" \
+            "meusite-${ENV}-vpc"
+          do
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK" --query "Stacks[0].StackStatus" \
+              --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [ "$STATUS" != "DOES_NOT_EXIST" ]; then
+              echo "Deletando: $STACK"
+              aws cloudformation delete-stack --stack-name "$STACK" --region ${{ env.AWS_REGION }}
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region ${{ env.AWS_REGION }} || true
+              echo "Removida: $STACK"
+            else
+              echo "$STACK nao existe, pulando."
+            fi
+          done
+
+      # ── Deleta as stacks dos CodePipelines ────────────────────────────────
+      - name: Delete CodePipeline stacks
+        run: |
+          ENV="${{ inputs.environment }}"
+          for STACK in \
+            "meusite-${ENV}-app-codepipeline" \
+            "meusite-${ENV}-infra-codepipeline"
+          do
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK" --query "Stacks[0].StackStatus" \
+              --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "DOES_NOT_EXIST")
+            if [ "$STATUS" != "DOES_NOT_EXIST" ]; then
+              echo "Deletando: $STACK"
+              aws cloudformation delete-stack --stack-name "$STACK" --region ${{ env.AWS_REGION }}
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region ${{ env.AWS_REGION }} || true
+              echo "Removida: $STACK"
+            else
+              echo "$STACK nao existe."
+            fi
+          done
+
+      # ── Esvazia e deleta o bucket S3 de artefatos ─────────────────────────
+      - name: Delete S3 artifacts bucket
+        run: |
+          ENV="${{ inputs.environment }}"
+          BUCKET="meusite-codepipeline-${ENV}-us-east-1"
+
+          if aws s3api head-bucket --bucket "$BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Suspendendo versionamento do bucket $BUCKET..."
+            aws s3api put-bucket-versioning \
+              --bucket "$BUCKET" \
+              --versioning-configuration Status=Suspended \
+              --region ${{ env.AWS_REGION }} || true
+
+            echo "Removendo todos os objetos..."
+            aws s3 rm "s3://$BUCKET" --recursive --region ${{ env.AWS_REGION }} || true
+
+            echo "Removendo versoes antigas e delete markers..."
+            while true; do
+              LIST=$(aws s3api list-object-versions \
+                --bucket "$BUCKET" \
+                --region ${{ env.AWS_REGION }} \
+                --max-items 1000 \
+                --output json 2>/dev/null || echo '{}')
+
+              COUNT=$(echo "$LIST" | jq '(.Versions // [] | length) + (.DeleteMarkers // [] | length)')
+              echo "Versoes/markers restantes: $COUNT"
+              if [ "$COUNT" = "0" ] || [ -z "$COUNT" ]; then break; fi
+
+              echo "$LIST" | jq '{Objects: ((.Versions // []) + (.DeleteMarkers // []) | map({Key: .Key, VersionId: .VersionId})), Quiet: true}' > /tmp/del.json
+              aws s3api delete-objects \
+                --bucket "$BUCKET" \
+                --delete file:///tmp/del.json \
+                --region ${{ env.AWS_REGION }} > /dev/null
+              echo "Lote removido."
+            done
+
+            rm -f /tmp/del.json
+            echo "Deletando bucket $BUCKET..."
+            aws s3api delete-bucket --bucket "$BUCKET" --region ${{ env.AWS_REGION }}
+            echo "Bucket $BUCKET removido."
+          else
+            echo "Bucket $BUCKET nao existe."
+          fi
+
+      # ── Desregistra todas as revisoes da task definition ──────────────────
+      - name: Deregister ECS task definitions
+        run: |
+          ENV="${{ inputs.environment }}"
+          FAMILY="meusite-${ENV}-task"
+          echo "Buscando revisoes da task definition $FAMILY..."
+          ARNS=$(aws ecs list-task-definitions \
+            --family-prefix "$FAMILY" \
+            --status ACTIVE \
+            --region ${{ env.AWS_REGION }} \
+            --query "taskDefinitionArns[]" \
+            --output text 2>/dev/null || echo "")
+          if [ -z "$ARNS" ]; then
+            echo "Nenhuma task definition encontrada."
+          else
+            for ARN in $ARNS; do
+              echo "Desregistrando: $ARN"
+              aws ecs deregister-task-definition \
+                --task-definition "$ARN" \
+                --region ${{ env.AWS_REGION }} > /dev/null
+            done
+            echo "Task definitions desregistradas."
+          fi
+
+      # ── Deleta CloudWatch Log Groups ──────────────────────────────────────
+      - name: Delete CloudWatch Log Groups
+        run: |
+          ENV="${{ inputs.environment }}"
+          for LOG_GROUP in \
+            "/ecs/meusite-${ENV}-app" \
+            "/codebuild/meusite-${ENV}-route53-deploy" \
+            "/codebuild/meusite-${ENV}-cfn-r53-deploy" \
+            "/codebuild/meusite-${ENV}-app-docker-build" \
+            "/codebuild/meusite-${ENV}-app-ecs-deploy"
+          do
+            if aws logs describe-log-groups \
+              --log-group-name-prefix "$LOG_GROUP" \
+              --region ${{ env.AWS_REGION }} \
+              --query "logGroups[0].logGroupName" \
+              --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+              echo "Deletando log group: $LOG_GROUP"
+              aws logs delete-log-group \
+                --log-group-name "$LOG_GROUP" \
+                --region ${{ env.AWS_REGION }} || true
+            else
+              echo "Log group $LOG_GROUP nao existe."
+            fi
+          done
+
+      - name: Summary
+        run: |
+          ENV="${{ inputs.environment }}"
+          echo "✅ Ambiente $ENV completamente removido."
+          echo ""
+          echo "Recursos removidos:"
+          if [ "$ENV" = "prod" ]; then
+            echo "  ✓ CloudFront + Route53 PROD (conta PROD)"
+          else
+            echo "  ✓ Route53 DEV (conta DEV)"
+          fi
+          echo "  ✓ ECS Service, ALB, ECS Cluster, SGs, VPC"
+          echo "  ✓ ECR (repositorio + todas as imagens)"
+          echo "  ✓ ECS task definitions (todas as revisoes)"
+          echo "  ✓ Stacks dos pipelines (infra + app)"
+          echo "  ✓ Bucket S3 meusite-codepipeline-${ENV}-us-east-1 (objetos + versoes)"
+          echo "  ✓ CloudWatch Log Groups"

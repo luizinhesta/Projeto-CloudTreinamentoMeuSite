@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 5 - Application Load Balancer, Target Group e Listeners.
+  Usa Fn::ImportValue para buscar VpcId, subnets e SG das stacks anteriores.
+  DEV:  listener HTTPS 443 com certificado ACM, encaminha para o Target Group.
+  PROD: listener HTTP 80 com regra que valida header X-Origin-Verify (enviado pelo CloudFront).
+        Requisicoes sem o header recebem 403 - impede acesso direto ao ALB.
+        O CloudFront termina o HTTPS e faz forward HTTP para o ALB.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+  AcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: ARN do certificado ACM para HTTPS (apenas DEV). Deixe vazio para PROD.
+
+  OriginVerifySecret:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      Valor do header X-Origin-Verify (apenas PROD).
+      Deve ser identico ao parametro OriginVerifySecret da stack 7-cloudfront.
+      Deixe vazio para DEV.
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
+  IsDev:  !Equals [!Ref Environment, "dev"]
+
+Resources:
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "meusite-${Environment}-alb"
+      Type: application
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          Fn::Sub: "MeuSite-${Environment}-PublicSubnet1Id"
+        - !ImportValue
+          Fn::Sub: "MeuSite-${Environment}-PublicSubnet2Id"
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: "MeuSite-${Environment}-AlbSecurityGroupId"
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-alb"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "meusite-${Environment}-tg"
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !ImportValue
+        Fn::Sub: "MeuSite-${Environment}-VpcId"
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-tg"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── DEV: listener HTTPS 443 com certificado ACM ───────────────────────────
+  # Acesso direto via https://meusite.dev.inhesta.net sem passar pelo CloudFront
+  HttpsListenerDev:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsDev
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref AcmCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ── DEV: listener HTTP 80 redireciona para HTTPS 443 ─────────────────────
+  HttpRedirectListenerDev:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsDev
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+
+  # ── PROD: listener HTTP 80 com validacao do header X-Origin-Verify ─────────
+  # CloudFront termina HTTPS e faz forward HTTP para o ALB na porta 80.
+  # Default action: 403 para qualquer requisicao sem o header correto.
+  HttpListenerProd:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsProd
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "403"
+            ContentType: text/plain
+            MessageBody: "Forbidden"
+
+  ListenerRuleOriginVerify:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: IsProd
+    Properties:
+      ListenerArn: !Ref HttpListenerProd
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Origin-Verify
+            Values:
+              - !Ref OriginVerifySecret
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  AlbArn:
+    Description: ARN do Application Load Balancer
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub "MeuSite-${Environment}-AlbArn"
+
+  AlbDnsName:
+    Description: DNS do ALB
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "MeuSite-${Environment}-AlbDnsName"
+
+  AlbHostedZoneId:
+    Description: Hosted Zone ID do ALB (para Alias records Route53)
+    Value: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub "MeuSite-${Environment}-AlbHostedZoneId"
+
+  TargetGroupArn:
+    Description: ARN do Target Group
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub "MeuSite-${Environment}-TargetGroupArn"

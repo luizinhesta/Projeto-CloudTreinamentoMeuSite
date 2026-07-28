@@ -1,0 +1,38 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      dotnet: 8.x
+
+  pre_build:
+    commands:
+      - echo Login no Amazon ECR
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+      - IMAGE_TAG=v$CODEBUILD_BUILD_NUMBER
+      - echo Tag da imagem $IMAGE_TAG
+      - dotnet --version
+
+  build:
+    commands:
+      - echo Restaurando dependencias
+      - dotnet restore meusite/MeuSite.csproj
+      - echo Publicando aplicacao
+      - dotnet publish meusite/MeuSite.csproj -c Release -o meusite/out
+      - echo Build da imagem Docker
+      - docker build -t meusite ./meusite
+      - docker tag meusite:latest $ECR_REGISTRY/$IMAGE_REPO:latest
+      - docker tag meusite:latest $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
+
+  post_build:
+    commands:
+      - echo Push da imagem
+      - docker push $ECR_REGISTRY/$IMAGE_REPO:latest
+      - docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
+      - echo Gerando imagedefinitions.json
+      - printf '[{"name":"meusite","imageUri":"%s"}]' "$ECR_REGISTRY/$IMAGE_REPO:latest" > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json

@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 3 - Repositorio ECR para imagens Docker do meusite.
+  Cada conta (DEV e PROD) tem seu proprio repositorio com nome fixo meusite-app.
+  Lifecycle policy mantem as ultimas 30 imagens para controle de custo.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+Resources:
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: meusite-app
+      EmptyOnDelete: true
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Manter ultimas 30 imagens (latest + versoes vN)",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 30
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-ecr"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  EcrRepositoryUri:
+    Description: URI completo do repositorio ECR (AccountId.dkr.ecr.region.amazonaws.com/meusite-app)
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/meusite-app"
+    Export:
+      Name: !Sub "MeuSite-${Environment}-EcrRepositoryUri"
+
+  EcrRepositoryName:
+    Description: Nome do repositorio ECR
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub "MeuSite-${Environment}-EcrRepositoryName"

@@ -1,0 +1,274 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CodePipeline APP PROD - Conta PROD (612131776567).
+  Stages: Source → Docker_Build_Push_ECR → Deploy_ECS.
+  Source: S3 (zip enviado pelo GitHub Actions).
+
+Parameters:
+  ArtifactsBucketName:
+    Type: String
+    Default: meusite-codepipeline-prod-us-east-1
+
+  SourceS3Key:
+    Type: String
+    Default: source/source.zip
+
+Resources:
+
+  CodePipelineAppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: meusite-prod-codepipeline-app-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: meusite-prod-codepipeline-app-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketVersioning, s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}/*"
+              - Effect: Allow
+                Action: [codebuild:BatchGetBuilds, codebuild:StartBuild, codebuild:StopBuild]
+                Resource: !Sub "arn:aws:codebuild:us-east-1:${AWS::AccountId}:project/meusite-prod-app-*"
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+  CodeBuildAppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: meusite-prod-codebuild-app-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: meusite-prod-codebuild-app-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactsBucketName}/*"
+              - Effect: Allow
+                Action: [ecr:GetAuthorizationToken, ecr:BatchCheckLayerAvailability,
+                         ecr:GetDownloadUrlForLayer, ecr:BatchGetImage, ecr:PutImage,
+                         ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload]
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecs:UpdateService, ecs:DescribeServices, ecs:RegisterTaskDefinition,
+                         ecs:DescribeTaskDefinition, ecs:ListTaskDefinitions, ecs:DeregisterTaskDefinition]
+                Resource: "*"
+              - Effect: Allow
+                Action: [iam:PassRole]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/meusite-*"
+              - Effect: Allow
+                Action: [cloudformation:DescribeStacks]
+                Resource: "*"
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+  CbDockerBuild:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildAppRole
+    Properties:
+      Name: meusite-prod-app-docker-build
+      Description: Docker build e push para ECR PROD
+      ServiceRole: !GetAtt CodeBuildAppRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REGISTRY
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.us-east-1.amazonaws.com"
+          - Name: IMAGE_REPO
+            Value: meusite-app
+          - Name: AWS_REGION
+            Value: us-east-1
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: /codebuild/meusite-prod-app-docker-build
+
+  CbEcsDeploy:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildAppRole
+    Properties:
+      Name: meusite-prod-app-ecs-deploy
+      Description: Registra nova task definition e faz deploy no ECS Service PROD
+      ServiceRole: !GetAtt CodeBuildAppRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - Name: AWS_REGION
+            Value: us-east-1
+          - Name: ENV
+            Value: prod
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - |
+                  set -e
+                  echo "=== Deploy ECS PROD ==="
+                  cat imagedefinitions.json
+                  NEW_IMAGE=$(python3 -c "import json; print(json.load(open('imagedefinitions.json'))[0]['imageUri'])")
+                  echo "Nova imagem: $NEW_IMAGE"
+                  CLUSTER="meusite-${ENV}-cluster"
+                  SERVICE="meusite-${ENV}-service"
+                  CURRENT_TASK_DEF=$(aws ecs describe-services \
+                    --cluster "$CLUSTER" --services "$SERVICE" \
+                    --region $AWS_REGION \
+                    --query "services[0].taskDefinition" --output text)
+                  echo "Task definition atual: $CURRENT_TASK_DEF"
+                  aws ecs describe-task-definition \
+                    --task-definition "$CURRENT_TASK_DEF" \
+                    --region $AWS_REGION \
+                    --query "taskDefinition" \
+                    --output json > /tmp/current-task.json
+                  python3 -c "
+                  import json, os
+                  td = json.load(open('/tmp/current-task.json'))
+                  new_image = os.environ['NEW_IMAGE']
+                  for c in td['containerDefinitions']:
+                      if c['name'] == 'meusite':
+                          c['image'] = new_image
+                  for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
+                      td.pop(k, None)
+                  json.dump(td, open('/tmp/new-task.json','w'))
+                  print('Task definition gerada com imagem: ' + new_image)
+                  "
+                  NEW_REVISION=$(aws ecs register-task-definition \
+                    --region $AWS_REGION \
+                    --cli-input-json file:///tmp/new-task.json \
+                    --query "taskDefinition.taskDefinitionArn" \
+                    --output text)
+                  echo "Nova revisao: $NEW_REVISION"
+                  aws ecs update-service \
+                    --cluster "$CLUSTER" \
+                    --service "$SERVICE" \
+                    --task-definition "$NEW_REVISION" \
+                    --desired-count 1 \
+                    --region $AWS_REGION
+                  echo "Aguardando service estabilizar..."
+                  aws ecs wait services-stable \
+                    --cluster "$CLUSTER" --services "$SERVICE" \
+                    --region $AWS_REGION
+                  echo "=== Deploy PROD concluido: $NEW_REVISION ==="
+                  echo "Acesso: https://meusite.prod.inhesta.net"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: /codebuild/meusite-prod-app-ecs-deploy
+
+  PipelineApp:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: [CodePipelineAppRole, CbDockerBuild, CbEcsDeploy]
+    Properties:
+      Name: meusite-prod-app-pipeline
+      RoleArn: !GetAtt CodePipelineAppRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactsBucketName
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: S3_Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket: !Ref ArtifactsBucketName
+                S3ObjectKey: !Ref SourceS3Key
+                PollForSourceChanges: "false"
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: Docker_Build_Push_ECR
+          Actions:
+            - Name: Build_e_Push_ECR
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CbDockerBuild
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+        - Name: Deploy_ECS
+          Actions:
+            - Name: Deploy_ECS_Service
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CbEcsDeploy
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+      Tags:
+        - Key: Name
+          Value: meusite-prod-app-pipeline
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: prod
+
+Outputs:
+  PipelineName:
+    Value: meusite-prod-app-pipeline
+    Export:
+      Name: MeuSite-Prod-AppPipelineName
+

@@ -1,0 +1,92 @@
+name: Deploy Application
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESPONSABILIDADE DESTE WORKFLOW:
+#   Fazer upload do codigo para o S3 e disparar o pipeline de app no CodePipeline.
+#   O CodePipeline é quem faz o build Docker, push ECR e deploy ECS.
+#
+# O QUE ESTE WORKFLOW FAZ:
+#   1. Zip do repositorio e upload para S3
+#   2. Dispara meusite-{env}-app-pipeline no CodePipeline
+#
+# O CodePipeline executa:
+#   Source → Docker_Build_Push_ECR → Deploy_ECS
+#
+# SECRETS NECESSÁRIOS NO GITHUB:
+#   AWS_ROLE_ARN_DEV  - ARN da role OIDC na conta DEV
+#   AWS_ROLE_ARN_PROD - ARN da role OIDC na conta PROD
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente de deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    name: Deploy App via CodePipeline (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (DEV)
+        if: inputs.environment == 'dev'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-deploy-app-dev
+
+      - name: Configure AWS Credentials (PROD)
+        if: inputs.environment == 'prod'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: meusite-deploy-app-prod
+
+      - name: Set variables
+        run: |
+          ENV="${{ inputs.environment }}"
+          if [ "$ENV" = "dev" ]; then
+            echo "BUCKET_NAME=meusite-codepipeline-dev-us-east-1" >> $GITHUB_ENV
+          else
+            echo "BUCKET_NAME=meusite-codepipeline-prod-us-east-1" >> $GITHUB_ENV
+          fi
+          echo "PIPELINE_NAME=meusite-${ENV}-app-pipeline" >> $GITHUB_ENV
+
+      - name: Upload source code to S3
+        run: |
+          echo "Criando zip do repositorio..."
+          zip -r source.zip . --exclude "*.git*" --exclude ".github/*"
+          echo "Upload para s3://$BUCKET_NAME/source/source.zip ..."
+          aws s3 cp source.zip "s3://$BUCKET_NAME/source/source.zip" --region ${{ env.AWS_REGION }}
+          echo "Upload concluido."
+          rm source.zip
+
+      - name: Start CodePipeline execution
+        run: |
+          echo "Disparando pipeline: $PIPELINE_NAME"
+          aws codepipeline start-pipeline-execution \
+            --name "$PIPELINE_NAME" \
+            --region ${{ env.AWS_REGION }}
+          echo ""
+          echo "Pipeline iniciado. Stages:"
+          echo "  Source → Docker_Build_Push_ECR → Deploy_ECS"
+          echo ""
+          echo "Acompanhe: https://console.aws.amazon.com/codesuite/codepipeline/pipelines/$PIPELINE_NAME/view?region=${{ env.AWS_REGION }}"

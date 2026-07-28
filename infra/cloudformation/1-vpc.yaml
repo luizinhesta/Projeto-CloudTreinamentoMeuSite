@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Stack 1 - VPC com subnets publicas e privadas + NAT Gateway (AZ-a).
+  CIDRs fixos por ambiente, definidos diretamente no template.
+  DEV:  10.1.0.0/16 | PROD: 10.2.0.0/16
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Nome do ambiente (dev ou prod)
+
+Conditions:
+  IsDev:  !Equals [!Ref Environment, "dev"]
+  IsProd: !Equals [!Ref Environment, "prod"]
+
+Mappings:
+  CidrMap:
+    dev:
+      VpcCidr:            "10.1.0.0/16"
+      PublicSubnet1Cidr:  "10.1.1.0/24"
+      PublicSubnet2Cidr:  "10.1.2.0/24"
+      PrivateSubnet1Cidr: "10.1.10.0/24"
+      PrivateSubnet2Cidr: "10.1.11.0/24"
+    prod:
+      VpcCidr:            "10.2.0.0/16"
+      PublicSubnet1Cidr:  "10.2.1.0/24"
+      PublicSubnet2Cidr:  "10.2.2.0/24"
+      PrivateSubnet1Cidr: "10.2.10.0/24"
+      PrivateSubnet2Cidr: "10.2.11.0/24"
+
+Resources:
+
+  # ─── VPC ───────────────────────────────────────────────────────────────────
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, VpcCidr]
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-vpc"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ─── Internet Gateway ──────────────────────────────────────────────────────
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-igw"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # ─── Subnets Publicas (ALB) ────────────────────────────────────────────────
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PublicSubnet1Cidr]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-public-subnet-1"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: public
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PublicSubnet2Cidr]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-public-subnet-2"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: public
+
+  # ─── Subnets Privadas (ECS Tasks) ──────────────────────────────────────────
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PrivateSubnet1Cidr]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-private-subnet-1"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: private
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PrivateSubnet2Cidr]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-private-subnet-2"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Tier
+          Value: private
+
+  # ─── NAT Gateway (AZ-a apenas - custo reduzido) ────────────────────────────
+  NatGatewayEip:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-nat-eip"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEip.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-nat-gw"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ─── Route Table Publica ───────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-public-rt"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ─── Route Table Privada ───────────────────────────────────────────────────
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "meusite-${Environment}-private-rt"
+        - Key: Project
+          Value: meusite
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub "MeuSite-${Environment}-VpcId"
+
+  VpcCidr:
+    Description: CIDR block da VPC
+    Value: !FindInMap [CidrMap, !Ref Environment, VpcCidr]
+    Export:
+      Name: !Sub "MeuSite-${Environment}-VpcCidr"
+
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "MeuSite-${Environment}-PublicSubnet1Id"
+
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "MeuSite-${Environment}-PublicSubnet2Id"
+
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "MeuSite-${Environment}-PrivateSubnet1Id"
+
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "MeuSite-${Environment}-PrivateSubnet2Id"
+
+  NatGatewayId:
+    Value: !Ref NatGateway
+    Export:
+      Name: !Sub "MeuSite-${Environment}-NatGatewayId"

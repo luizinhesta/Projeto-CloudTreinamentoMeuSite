@@ -1,0 +1,8 @@
+{
+  "Environment": "dev",
+  "DesiredCount": "0",
+  "AwsRegion": "us-east-1",
+  "AccountId": "377235609325",
+  "DomainName": "meusite.dev.inhesta.net",
+  "AcmCertificateArn": "arn:aws:acm:us-east-1:377235609325:certificate/1bbfca59-b160-406e-bca1-6a035c30d053"
+}
