@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Stack 7 - CloudFront Distribution. PROD ONLY. Conta PROD (612131776567).
+  Stack 7 - CloudFront Distribution. PROD ONLY. Conta PROD (222222222222).
   Criado na conta PROD via pipeline nativo CloudFormation.
   Busca o DNS do ALB via Fn::ImportValue da stack 5-alb.
   Origin: ALB PROD via HTTP. Viewer: HTTPS com certificado ACM.
@@ -15,7 +15,7 @@ Parameters:
 
   DomainName:
     Type: String
-    Default: meusite.inhesta.net
+    Default: meusite.exemplo.com.br
     Description: Dominio publico do site (alias no CloudFront)
 
   AcmCertificateArn:
@@ -24,7 +24,7 @@ Parameters:
 
   OriginVerifySecret:
     Type: String
-    Default: meusite-prod-origin-secret-2024
+    Default: seu-segredo-origin-verify
     NoEcho: true
     Description: >
       Valor do header X-Origin-Verify enviado pelo CloudFront ao ALB.

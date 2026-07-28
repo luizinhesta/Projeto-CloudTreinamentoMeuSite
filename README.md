@@ -24,9 +24,9 @@ O resultado é uma aplicação ASP.NET Core (.NET 8) rodando em containers no EC
 
 | Conta | ID | Responsabilidade |
 |---|---|---|
-| DEV | `377235609325` | Ambiente de desenvolvimento — Hosted Zone `dev.inhesta.net` |
-| PROD | `612131776567` | Ambiente de produção — Hosted Zone `prod.inhesta.net` |
-| MASTER | `319165778373` | Domínio raiz `inhesta.net` com delegação de subdomínios para DEV e PROD |
+| DEV | `111111111111` | Ambiente de desenvolvimento — Hosted Zone `dev.exemplo.com.br` |
+| PROD | `222222222222` | Ambiente de produção — Hosted Zone `prod.exemplo.com.br` |
+| MASTER | `333333333333` | Domínio raiz `exemplo.com.br` com delegação de subdomínios para DEV e PROD |
 
 ![Objetivos](imagens/imagem(10).png)
 
@@ -64,10 +64,10 @@ Pipeline de App (DEV ou PROD)
 
 ```
 DEV (HTTPS direto no ALB)
-  Usuário → Route53 (meusite.dev.inhesta.net) → ALB (HTTPS 443) → ECS Tasks (porta 8080)
+  Usuário → Route53 (meusite.dev.exemplo.com.br) → ALB (HTTPS 443) → ECS Tasks (porta 8080)
 
 PROD (HTTPS via CloudFront)
-  Usuário → Route53 (meusite.prod.inhesta.net) → CloudFront (HTTPS) ──HTTP──► ALB (porta 80, IPs CloudFront only) → ECS Tasks (porta 8080)
+  Usuário → Route53 (meusite.prod.exemplo.com.br) → CloudFront (HTTPS) ──HTTP──► ALB (porta 80, IPs CloudFront only) → ECS Tasks (porta 8080)
 ```
 
 ![Objetivos](imagens/imagem(5).png)
@@ -140,10 +140,10 @@ Configure em **Settings → Secrets and variables → Actions**:
 
 | Secret | Descrição |
 |---|---|
-| `AWS_ROLE_ARN_DEV` | ARN da role OIDC na conta DEV (`arn:aws:iam::377235609325:role/GitHubActionsRoleCloudTreinamentoMeuSite`) |
-| `AWS_ROLE_ARN_PROD` | ARN da role OIDC na conta PROD (`arn:aws:iam::612131776567:role/GitHubActionsRoleCloudTreinamentoMeuSite`) |
+| `AWS_ROLE_ARN_DEV` | ARN da role OIDC na conta DEV (`arn:aws:iam::111111111111:role/GitHubActionsRole`) |
+| `AWS_ROLE_ARN_PROD` | ARN da role OIDC na conta PROD (`arn:aws:iam::222222222222:role/GitHubActionsRole`) |
 
-As roles precisam ter trust policy para `token.actions.githubusercontent.com` com `repo:luizinhesta/CloudTreinamentoMeuSite:*`.
+As roles precisam ter trust policy para `token.actions.githubusercontent.com` com `repo:seu-usuario/SeuRepositorio:*`.
 
 ### Fluxo completo
 
@@ -242,12 +242,12 @@ A cada execução do pipeline de app:
 
 ### Delegação de subdomínios
 
-A conta MASTER possui o domínio `inhesta.net`. Os subdomínios foram delegados via registros NS:
+A conta MASTER possui o domínio `exemplo.com.br`. Os subdomínios foram delegados via registros NS:
 
 | Subdomínio | Hosted Zone | Conta |
 |---|---|---|
-| `dev.inhesta.net` | Gerenciada na conta DEV | DEV |
-| `prod.inhesta.net` | Gerenciada na conta PROD | PROD |
+| `dev.exemplo.com.br` | Gerenciada na conta DEV | DEV |
+| `prod.exemplo.com.br` | Gerenciada na conta PROD | PROD |
 
 Cada conta gerencia seus próprios registros DNS sem precisar de acesso cross-account.
 
@@ -255,11 +255,11 @@ Cada conta gerencia seus próprios registros DNS sem precisar de acesso cross-ac
 
 | Ambiente | Certificado | Conta | Usado em |
 |---|---|---|---|
-| DEV | `*.dev.inhesta.net` | DEV (`377235609325`) | ALB (HTTPS 443) |
+| DEV | `*.dev.exemplo.com.br` | DEV (`111111111111`) | ALB (HTTPS 443) |
 
 ![Objetivos](imagens/imagem(20).png)
 
-| PROD | `*.prod.inhesta.net` | PROD (`612131776567`) | CloudFront (HTTPS) |
+| PROD | `*.prod.exemplo.com.br` | PROD (`222222222222`) | CloudFront (HTTPS) |
 
 ![Objetivos](imagens/imagem(21).png)
 
@@ -267,11 +267,11 @@ Cada conta gerencia seus próprios registros DNS sem precisar de acesso cross-ac
 
 | Ambiente | URL |
 |---|---|
-| DEV | `https://meusite.dev.inhesta.net` |
+| DEV | `https://meusite.dev.exemplo.com.br` |
 
 ![Objetivos](imagens/imagem(24).png)
 
-| PROD | `https://meusite.prod.inhesta.net` |
+| PROD | `https://meusite.prod.exemplo.com.br` |
 
 ![Objetivos](imagens/imagem(23).png)
 
@@ -282,12 +282,12 @@ Cada conta gerencia seus próprios registros DNS sem precisar de acesso cross-ac
 O ALB de PROD não é acessível diretamente pela internet. Duas camadas de proteção:
 
 **1. Security Group (nível de rede)**
-O SG do ALB PROD usa o AWS Managed Prefix List `pl-3b927c52` (`com.amazonaws.global.cloudfront.origin-facing`).
+O SG do ALB PROD usa o AWS Managed Prefix List `pl-xxxxxxxx` (`com.amazonaws.global.cloudfront.origin-facing`).
 Apenas IPs de origem do CloudFront conseguem abrir conexão TCP na porta 80.
 A AWS mantém essa lista automaticamente — sem necessidade de atualização manual de IPs.
 
 **2. Header secreto (nível de aplicação)**
-O CloudFront injeta o header `X-Origin-Verify: meusite-prod-origin-secret-2024` em todas as requisições para o ALB.
+O CloudFront injeta o header `X-Origin-Verify: seu-segredo-origin-verify` em todas as requisições para o ALB.
 O ALB tem uma regra que encaminha para o Target Group apenas se o header estiver presente com o valor correto.
 Requisições sem o header recebem `403 Forbidden`.
 
@@ -339,9 +339,9 @@ DEV não tem Auto Scaling — para economizar custo use `desired-count 0` quando
 |---|---|
 | Environment | `dev` |
 | DesiredCount | `0` |
-| AccountId | `377235609325` |
-| DomainName | `meusite.dev.inhesta.net` |
-| AcmCertificateArn | `arn:aws:acm:us-east-1:377235609325:certificate/1bbfca59-b160-406e-bca1-6a035c30d053` |
+| AccountId | `111111111111` |
+| DomainName | `meusite.dev.exemplo.com.br` |
+| AcmCertificateArn | `arn:aws:acm:us-east-1:111111111111:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
 
 ### prod.json (referência — não lido pelos pipelines)
 
@@ -349,9 +349,9 @@ DEV não tem Auto Scaling — para economizar custo use `desired-count 0` quando
 |---|---|
 | Environment | `prod` |
 | DesiredCount | `0` |
-| AccountId | `612131776567` |
-| DomainName | `meusite.prod.inhesta.net` |
-| AcmCertificateArn | `arn:aws:acm:us-east-1:612131776567:certificate/3c2cb721-53b8-4b08-8e3a-ad4c24029bda` |
+| AccountId | `222222222222` |
+| DomainName | `meusite.prod.exemplo.com.br` |
+| AcmCertificateArn | `arn:aws:acm:us-east-1:222222222222:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy` |
 
 > Os CIDRs de VPC e subnets estão fixos no template `1-vpc.yaml` via `Mappings` — DEV usa `10.1.0.0/16` e PROD usa `10.2.0.0/16`. Os pipelines passam apenas `Environment` como parâmetro para o stage VPC.
 
@@ -369,7 +369,7 @@ infra/
                                                 DEV: 10.1.0.0/16 | PROD: 10.2.0.0/16
     2-security-groups.yaml                    ← SGs: ALB e ECS Tasks
                                                 DEV:  ALB aceita HTTP 80 (redireciona para HTTPS) e HTTPS 443 de qualquer origem
-                                                PROD: ALB aceita HTTP 80 apenas dos IPs do CloudFront (Managed Prefix List pl-3b927c52)
+                                                PROD: ALB aceita HTTP 80 apenas dos IPs do CloudFront (Managed Prefix List pl-xxxxxxxx)
     3-ecr.yaml                                ← ECR Repository (meusite-app) + EmptyOnDelete
     4-ecs-cluster.yaml                        ← ECS Cluster Fargate
     5-alb.yaml                                ← ALB + Target Group
@@ -381,8 +381,8 @@ infra/
     7-cloudfront.yaml                         ← CloudFront (PROD only, conta PROD)
                                                 Envia header X-Origin-Verify para o ALB
     8-route53.yaml                            ← Registro DNS Alias na propria conta
-                                                DEV:  meusite.dev.inhesta.net → ALB
-                                                PROD: meusite.prod.inhesta.net → CloudFront
+                                                DEV:  meusite.dev.exemplo.com.br → ALB
+                                                PROD: meusite.prod.exemplo.com.br → CloudFront
     parameters/
       dev.json                                ← Referencia de parametros DEV (nao lido pelos pipelines)
       prod.json                               ← Referencia de parametros PROD (nao lido pelos pipelines)
@@ -408,10 +408,10 @@ infra/
 ### Pré-requisitos
 
 1. **Roles OIDC** criadas manualmente em DEV e PROD com trust policy para GitHub Actions
-2. **Hosted Zones delegadas** — `dev.inhesta.net` na conta DEV e `prod.inhesta.net` na conta PROD, com registros NS criados na conta MASTER em `inhesta.net`
+2. **Hosted Zones delegadas** — `dev.exemplo.com.br` na conta DEV e `prod.exemplo.com.br` na conta PROD, com registros NS criados na conta MASTER em `exemplo.com.br`
 3. **Certificados ACM** emitidos:
-   - DEV: `*.dev.inhesta.net` na conta DEV (`us-east-1`)
-   - PROD: `*.prod.inhesta.net` na conta PROD (`us-east-1`)
+   - DEV: `*.dev.exemplo.com.br` na conta DEV (`us-east-1`)
+   - PROD: `*.prod.exemplo.com.br` na conta PROD (`us-east-1`)
 4. **Service-linked roles** — criadas automaticamente pelo workflow no primeiro deploy
 
 ![Objetivos](imagens/imagem(13).png)
@@ -425,7 +425,7 @@ GitHub → Actions → Deploy Infrastructure → Run workflow
 ```
 
 O workflow:
-1. Busca o ID da Hosted Zone (`dev.inhesta.net` ou `prod.inhesta.net`) na conta alvo
+1. Busca o ID da Hosted Zone (`dev.exemplo.com.br` ou `prod.exemplo.com.br`) na conta alvo
 2. Cria bucket S3 `meusite-codepipeline-{env}-us-east-1` se não existir
 3. Faz zip do repo e upload para S3
 4. Cria/atualiza stack `meusite-{env}-infra-codepipeline` passando o `HostedZoneId`
@@ -530,7 +530,7 @@ aws ecr delete-repository --repository-name meusite-app --force --region us-east
 **`Could not assume role with OIDC: Request ARN is invalid`**
 A trust policy da role OIDC está restringindo a branch errada. Altere o `sub` para:
 ```
-repo:luizinhesta/CloudTreinamentoMeuSite:*
+repo:seu-usuario/SeuRepositorio:*
 ```
 
 **ECS Service não estabiliza após deploy da app**
@@ -542,7 +542,7 @@ repo:luizinhesta/CloudTreinamentoMeuSite:*
 O `imagedefinitions.json` não foi encontrado. Verifique se o stage `Docker_Build_Push_ECR` gerou o artefato `BuildOutput`.
 
 **ALB PROD retorna 403**
-Acesso direto ao DNS do ALB sem passar pelo CloudFront. Acesse sempre via `https://meusite.prod.inhesta.net`.
+Acesso direto ao DNS do ALB sem passar pelo CloudFront. Acesse sempre via `https://meusite.prod.exemplo.com.br`.
 
 **`error: 'vN' is not a valid version string` no CodeBuild**
 A variável de ambiente `VERSION` conflita com o MSBuild/NuGet que a usa internamente como versão do pacote.
@@ -568,7 +568,7 @@ O buildspec usa `IMAGE_TAG` em vez de `VERSION` para evitar esse conflito.
 
 - `./meusite` é imutável — nenhum pipeline modifica seus arquivos.
 - O build .NET (`dotnet restore` + `dotnet publish`) é feito no CodeBuild, não no Dockerfile. Framework: .NET 8.
-- DEV: HTTP redireciona para HTTPS no ALB. Certificado `*.dev.inhesta.net`.
+- DEV: HTTP redireciona para HTTPS no ALB. Certificado `*.dev.exemplo.com.br`.
 - PROD: HTTPS terminado no CloudFront, ALB recebe HTTP apenas de IPs do CloudFront. Auto Scaling min 1 / max 4.
 - DEV e PROD iniciam com `DesiredCount=0`. O pipeline de app sobe para `1` automaticamente.
 - Imagens ECR são tagueadas como `latest` e `v{BUILD_NUMBER}` a cada build.

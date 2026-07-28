@@ -75,4 +75,4 @@ phases:
           --region $AWS_REGION
 
         echo "=== Deploy concluido: $NEW_IMAGE ==="
-        echo "Acesso PROD: https://meusite.inhesta.net"
+        echo "Acesso PROD: https://meusite.prod.exemplo.com.br"

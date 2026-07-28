@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CodePipeline APP DEV - Conta DEV (377235609325).
+  CodePipeline APP DEV - Conta DEV (111111111111).
   Stages: Source → Docker Build + Push ECR → Deploy ECS.
   Source: S3 (zip enviado pelo GitHub Actions).
   PRE-REQUISITO: pipeline de infra deve ter rodado com sucesso antes.

@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CodePipeline INFRA PROD - Conta PROD (612131776567).
+  CodePipeline INFRA PROD - Conta PROD (222222222222).
   Pipeline 100% nativo CloudFormation: Source → VPC → SG → ECR → ECS_Cluster → ALB → ECS_Service → CloudFront → Route53.
-  Sem CodeBuild. Route53 criado na Hosted Zone prod.inhesta.net da propria conta PROD.
+  Sem CodeBuild. Route53 criado na Hosted Zone prod.exemplo.com.br da propria conta PROD.
   Source: S3 (zip enviado pelo GitHub Actions).
 
 Parameters:
@@ -16,7 +16,7 @@ Parameters:
 
   HostedZoneIdProd:
     Type: AWS::Route53::HostedZone::Id
-    Description: ID da Hosted Zone prod.inhesta.net na conta PROD
+    Description: ID da Hosted Zone prod.exemplo.com.br na conta PROD
 
 Resources:
 
@@ -330,7 +330,7 @@ Resources:
                 ParameterOverrides: |
                   {
                     "Environment": "prod",
-                    "OriginVerifySecret": "meusite-prod-origin-secret-2024"
+                    "OriginVerifySecret": "seu-segredo-origin-verify"
                   }
               InputArtifacts:
                 - Name: SourceCode
@@ -373,9 +373,9 @@ Resources:
                 ParameterOverrides: |
                   {
                     "Environment": "prod",
-                    "DomainName": "meusite.prod.inhesta.net",
-                    "AcmCertificateArn": "arn:aws:acm:us-east-1:612131776567:certificate/3c2cb721-53b8-4b08-8e3a-ad4c24029bda",
-                    "OriginVerifySecret": "meusite-prod-origin-secret-2024"
+                    "DomainName": "meusite.prod.exemplo.com.br",
+                    "AcmCertificateArn": "arn:aws:acm:us-east-1:222222222222:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+                    "OriginVerifySecret": "seu-segredo-origin-verify"
                   }
               InputArtifacts:
                 - Name: SourceCode
@@ -398,7 +398,7 @@ Resources:
                 ParameterOverrides: !Sub |
                   {
                     "Environment": "prod",
-                    "DomainName": "meusite.prod.inhesta.net",
+                    "DomainName": "meusite.prod.exemplo.com.br",
                     "HostedZoneId": "${HostedZoneIdProd}"
                   }
               InputArtifacts:

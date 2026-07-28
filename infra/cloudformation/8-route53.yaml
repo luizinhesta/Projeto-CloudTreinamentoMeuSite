@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Stack 8 - Route53 Alias Record.
   Criado na propria conta (DEV ou PROD), sem cross-account.
-  DEV:  Hosted Zone dev.inhesta.net na conta DEV - Alias A para ALB.
-  PROD: Hosted Zone prod.inhesta.net na conta PROD - Alias A para CloudFront.
+  DEV:  Hosted Zone dev.exemplo.com.br na conta DEV - Alias A para ALB.
+  PROD: Hosted Zone prod.exemplo.com.br na conta PROD - Alias A para CloudFront.
   Pre-requisito: Hosted Zone delegada deve existir na propria conta.
 
 Parameters:
@@ -14,14 +14,14 @@ Parameters:
 
   DomainName:
     Type: String
-    Description: Registro DNS a criar (ex meusite.dev.inhesta.net ou meusite.prod.inhesta.net)
+    Description: Registro DNS a criar (ex meusite.dev.exemplo.com.br ou meusite.prod.exemplo.com.br)
 
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: >
       ID da Hosted Zone delegada na propria conta.
-      DEV:  Hosted Zone de dev.inhesta.net na conta DEV.
-      PROD: Hosted Zone de prod.inhesta.net na conta PROD.
+      DEV:  Hosted Zone de dev.exemplo.com.br na conta DEV.
+      PROD: Hosted Zone de prod.exemplo.com.br na conta PROD.
 
 Conditions:
   IsProd: !Equals [!Ref Environment, "prod"]

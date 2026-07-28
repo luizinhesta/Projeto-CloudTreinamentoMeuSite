@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CodePipeline APP PROD - Conta PROD (612131776567).
+  CodePipeline APP PROD - Conta PROD (222222222222).
   Stages: Source → Docker_Build_Push_ECR → Deploy_ECS.
   Source: S3 (zip enviado pelo GitHub Actions).
 
@@ -194,7 +194,7 @@ Resources:
                     --cluster "$CLUSTER" --services "$SERVICE" \
                     --region $AWS_REGION
                   echo "=== Deploy PROD concluido: $NEW_REVISION ==="
-                  echo "Acesso: https://meusite.prod.inhesta.net"
+                  echo "Acesso: https://meusite.prod.exemplo.com.br"
       LogsConfig:
         CloudWatchLogs:
           Status: ENABLED

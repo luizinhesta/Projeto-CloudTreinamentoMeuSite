@@ -169,10 +169,10 @@ jobs:
           ENV="${{ inputs.environment }}"
 
           if [ "$ENV" = "dev" ]; then
-            # Busca o ID da Hosted Zone dev.inhesta.net na conta DEV
+            # Busca o ID da Hosted Zone dev.exemplo.com.br na conta DEV
             HZ_ID=$(aws route53 list-hosted-zones-by-name \
-              --dns-name "dev.inhesta.net." \
-              --query "HostedZones[?Name=='dev.inhesta.net.'].Id" \
+              --dns-name "dev.exemplo.com.br." \
+              --query "HostedZones[?Name=='dev.exemplo.com.br.'].Id" \
               --output text | sed 's|/hostedzone/||')
             echo "HostedZoneId DEV: $HZ_ID"
             aws cloudformation deploy \
@@ -183,10 +183,10 @@ jobs:
               --no-fail-on-empty-changeset \
               --region ${{ env.AWS_REGION }}
           else
-            # Busca o ID da Hosted Zone prod.inhesta.net na conta PROD
+            # Busca o ID da Hosted Zone prod.exemplo.com.br na conta PROD
             HZ_ID=$(aws route53 list-hosted-zones-by-name \
-              --dns-name "prod.inhesta.net." \
-              --query "HostedZones[?Name=='prod.inhesta.net.'].Id" \
+              --dns-name "prod.exemplo.com.br." \
+              --query "HostedZones[?Name=='prod.exemplo.com.br.'].Id" \
               --output text | sed 's|/hostedzone/||')
             echo "HostedZoneId PROD: $HZ_ID"
             aws cloudformation deploy \

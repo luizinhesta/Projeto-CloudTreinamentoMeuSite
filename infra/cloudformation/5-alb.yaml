@@ -80,7 +80,7 @@ Resources:
           Value: !Ref Environment
 
   # ── DEV: listener HTTPS 443 com certificado ACM ───────────────────────────
-  # Acesso direto via https://meusite.dev.inhesta.net sem passar pelo CloudFront
+  # Acesso direto via https://meusite.dev.exemplo.com.br sem passar pelo CloudFront
   HttpsListenerDev:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Condition: IsDev

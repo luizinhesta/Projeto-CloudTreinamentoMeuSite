@@ -2,7 +2,7 @@
   "Environment": "prod",
   "DesiredCount": "0",
   "AwsRegion": "us-east-1",
-  "AccountId": "612131776567",
-  "DomainName": "meusite.prod.inhesta.net",
-  "AcmCertificateArn": "arn:aws:acm:us-east-1:612131776567:certificate/3c2cb721-53b8-4b08-8e3a-ad4c24029bda"
+  "AccountId": "222222222222",
+  "DomainName": "meusite.prod.exemplo.com.br",
+  "AcmCertificateArn": "arn:aws:acm:us-east-1:222222222222:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
 }

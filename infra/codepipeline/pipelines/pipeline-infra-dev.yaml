@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CodePipeline INFRA DEV - Conta DEV (377235609325).
+  CodePipeline INFRA DEV - Conta DEV (111111111111).
   Pipeline 100% nativo CloudFormation: Source → VPC → SG → ECR → ECS_Cluster → ALB → ECS_Service → Route53.
-  Sem CodeBuild. Route53 criado na Hosted Zone dev.inhesta.net da propria conta DEV.
+  Sem CodeBuild. Route53 criado na Hosted Zone dev.exemplo.com.br da propria conta DEV.
   Source: S3 (zip enviado pelo GitHub Actions).
 
 Parameters:
@@ -16,7 +16,7 @@ Parameters:
 
   HostedZoneIdDev:
     Type: AWS::Route53::HostedZone::Id
-    Description: ID da Hosted Zone dev.inhesta.net na conta DEV
+    Description: ID da Hosted Zone dev.exemplo.com.br na conta DEV
 
 Resources:
 
@@ -301,7 +301,7 @@ Resources:
                 ParameterOverrides: |
                   {
                     "Environment": "dev",
-                    "AcmCertificateArn": "arn:aws:acm:us-east-1:377235609325:certificate/1bbfca59-b160-406e-bca1-6a035c30d053"
+                    "AcmCertificateArn": "arn:aws:acm:us-east-1:111111111111:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                   }
               InputArtifacts:
                 - Name: SourceCode
@@ -344,7 +344,7 @@ Resources:
                 ParameterOverrides: !Sub |
                   {
                     "Environment": "dev",
-                    "DomainName": "meusite.dev.inhesta.net",
+                    "DomainName": "meusite.dev.exemplo.com.br",
                     "HostedZoneId": "${HostedZoneIdDev}"
                   }
               InputArtifacts:
