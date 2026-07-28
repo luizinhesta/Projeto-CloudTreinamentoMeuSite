@@ -1,4 +1,4 @@
-# Projeto 2 — MeuSite
+# Do ambiente DEV à produção: Pipeline CI/CD e Infraestrutura como Código (IaC) na AWS — Projeto 2: Meu Site
 
 ## Sobre o projeto
 
